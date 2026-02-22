@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d0d0d"/>
+      <stop offset="100%" style="stop-color:#1a1a1a"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00FF41"/>
+      <stop offset="100%" style="stop-color:#00c835"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow2">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="24" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="24" fill="none" stroke="#00FF41" stroke-width="2" opacity="0.3"/>
+
+  <!-- Scan line effect -->
+  <rect width="512" height="1" y="256" fill="#00FF41" opacity="0.04"/>
+
+  <!-- Grid dots -->
+  <g opacity="0.06" fill="#00FF41">
+    <circle cx="80" cy="80" r="1.5"/><circle cx="160" cy="80" r="1.5"/><circle cx="240" cy="80" r="1.5"/>
+    <circle cx="320" cy="80" r="1.5"/><circle cx="400" cy="80" r="1.5"/><circle cx="432" cy="80" r="1.5"/>
+    <circle cx="80" cy="160" r="1.5"/><circle cx="432" cy="160" r="1.5"/>
+    <circle cx="80" cy="432" r="1.5"/><circle cx="160" cy="432" r="1.5"/><circle cx="240" cy="432" r="1.5"/>
+    <circle cx="320" cy="432" r="1.5"/><circle cx="400" cy="432" r="1.5"/><circle cx="432" cy="432" r="1.5"/>
+  </g>
+
+  <!-- Candlestick chart (decorative, left side) -->
+  <g opacity="0.18" stroke="#00FF41" stroke-width="1.5" fill="none">
+    <line x1="68" y1="200" x2="68" y2="310"/>
+    <rect x="62" y="230" width="12" height="50" fill="#00FF41" opacity="0.6"/>
+    <line x1="92" y1="210" x2="92" y2="300"/>
+    <rect x="86" y="225" width="12" height="45" fill="#FF2D2D" opacity="0.5"/>
+    <line x1="116" y1="220" x2="116" y2="295"/>
+    <rect x="110" y="240" width="12" height="30" fill="#00FF41" opacity="0.6"/>
+    <line x1="140" y1="195" x2="140" y2="290"/>
+    <rect x="134" y="215" width="12" height="40" fill="#00FF41" opacity="0.6"/>
+  </g>
+
+  <!-- Candlestick chart (decorative, right side) -->
+  <g opacity="0.18" stroke="#00FF41" stroke-width="1.5" fill="none">
+    <line x1="372" y1="205" x2="372" y2="305"/>
+    <rect x="366" y="230" width="12" height="40" fill="#FF2D2D" opacity="0.5"/>
+    <line x1="396" y1="215" x2="396" y2="295"/>
+    <rect x="390" y="235" width="12" height="35" fill="#00FF41" opacity="0.6"/>
+    <line x1="420" y1="200" x2="420" y2="310"/>
+    <rect x="414" y="225" width="12" height="55" fill="#00FF41" opacity="0.6"/>
+    <line x1="444" y1="210" x2="444" y2="300"/>
+    <rect x="438" y="228" width="12" height="42" fill="#FF2D2D" opacity="0.5"/>
+  </g>
+
+  <!-- Price line (decorative) -->
+  <polyline points="60,290 90,265 120,275 150,250 180,260 200,240"
+    fill="none" stroke="#00D4FF" stroke-width="1.5" opacity="0.25" stroke-dasharray="4,3"/>
+
+  <!-- Center: FX monogram -->
+  <g filter="url(#glow2)">
+    <!-- F -->
+    <rect x="174" y="178" width="8" height="68" fill="url(#green)"/>
+    <rect x="174" y="178" width="44" height="8" fill="url(#green)"/>
+    <rect x="174" y="208" width="34" height="7" fill="url(#green)"/>
+    <!-- X -->
+    <line x1="232" y1="178" x2="270" y2="246" stroke="url(#green)" stroke-width="8" stroke-linecap="round"/>
+    <line x1="270" y1="178" x2="232" y2="246" stroke="url(#green)" stroke-width="8" stroke-linecap="round"/>
+  </g>
+
+  <!-- Separator line -->
+  <line x1="164" y1="268" x2="350" y2="268" stroke="#00FF41" stroke-width="1" opacity="0.5" filter="url(#glow)"/>
+
+  <!-- TERMINAL text -->
+  <text x="256" y="310"
+    font-family="'IBM Plex Mono', 'Courier New', monospace"
+    font-size="28"
+    font-weight="700"
+    fill="#00FF41"
+    text-anchor="middle"
+    letter-spacing="8"
+    filter="url(#glow)"
+    opacity="0.95">TERMINAL</text>
+
+  <!-- Tagline -->
+  <text x="256" y="338"
+    font-family="'IBM Plex Mono', 'Courier New', monospace"
+    font-size="11"
+    fill="#00D4FF"
+    text-anchor="middle"
+    letter-spacing="4"
+    opacity="0.6">DXY × WDO</text>
+
+  <!-- Corner brackets -->
+  <g stroke="#00FF41" stroke-width="2" fill="none" opacity="0.4">
+    <path d="M30,50 L30,30 L50,30"/>
+    <path d="M462,30 L482,30 L482,50"/>
+    <path d="M30,462 L30,482 L50,482"/>
+    <path d="M462,482 L482,482 L482,462"/>
+  </g>
+
+  <!-- Blinking cursor -->
+  <rect x="295" y="295" width="8" height="20" fill="#00FF41" opacity="0.8">
+    <animate attributeName="opacity" values="0.8;0;0.8" dur="1.2s" repeatCount="indefinite"/>
+  </rect>
+</svg>
