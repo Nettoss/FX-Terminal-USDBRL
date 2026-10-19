@@ -1375,6 +1375,7 @@ footer {
         <div class="panel-head">
           <div class="panel-title">📡 LOG DE CONEXÃO</div>
           <div style="display:flex;gap:6px">
+            <div class="ptag" onclick="copyDiag()" title="Copia o log e as falhas para colar no suporte" style="cursor:pointer;color:var(--amber);border:1px solid var(--amber);background:transparent">COPIAR LOG</div>
             <div class="ptag" id="badge-fh" style="color:var(--t4);border:1px solid var(--b2);background:transparent">FINNHUB</div>
             <div class="ptag" id="badge-bcb" style="color:var(--t4);border:1px solid var(--b2);background:transparent">BCB</div>
           </div>
@@ -1435,7 +1436,7 @@ footer {
       </table>
     </div>
     <div style="padding:8px 14px;border-top:1px solid var(--b1);display:flex;gap:20px;font-size:10px;color:var(--t4)">
-      <span>⚠ Horários em BRT (Brasília). Fonte: Claude AI + ForexFactory — atualizado automaticamente toda semana.</span>
+      <span>⚠ Horários em BRT (Brasília). Fontes: ForexFactory (EUA) · IBGE e BCB (Brasil) · eventos manuais — atualizado automaticamente.</span>
       <span style="margin-left:auto;color:var(--t3)">Próx. atualização: <span id="agendaNextUpd" style="color:var(--amber)">—</span></span>
     </div>
   </div>
@@ -2065,6 +2066,22 @@ function setBar(id, pct, color) {
   if (color) el.style.background = color;
 }
 
+function copyDiag() {
+  const clean = t => String(t).replace(/(token|api_key|apikey)=[^&\s"']+/gi, '$1=***');
+  const lines = [...document.querySelectorAll('#logbox div')].map(d => clean(d.textContent));
+  const txt = [
+    'FX Terminal v3.4 — diagnóstico', new Date().toLocaleString('pt-BR'),
+    'Modo: ' + S.mode, 'Falhas de fonte: ' + (JSON.stringify(S.diag) || '{}'),
+    'Agenda: ' + (typeof AGENDA_DATA !== 'undefined' ? AGENDA_DATA.length : '?') + ' eventos',
+    'Mercados globais: ' + Object.entries(GM_DATA).map(([k, v]) => k + (v.proxy ? '(proxy)' : '')).join(', '),
+    '---', ...lines
+  ].join('\n');
+  const fallback = () => { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); log('📋 Diagnóstico copiado — cole na conversa', 'log-g'); } catch(_) { prompt('Copie o diagnóstico:', txt); } ta.remove(); };
+  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(txt).then(() => log('📋 Diagnóstico copiado — cole na conversa', 'log-g')).catch(fallback);
+  else fallback();
+}
+
 function log(msg, cls='log-m') {
   const box = $('logbox');
   const ts  = new Date().toLocaleTimeString('pt-BR');
@@ -2073,7 +2090,7 @@ function log(msg, cls='log-m') {
   d.textContent = `[${ts}] ${msg}`;
   box.appendChild(d);
   box.scrollTop = box.scrollHeight;
-  if (box.children.length > 80) box.removeChild(box.firstChild);
+  if (box.children.length > 300) box.removeChild(box.firstChild);
 }
 
 function setWs(key, text, color) {
@@ -3358,6 +3375,8 @@ async function loadGlobalMarkets() {
   if (badge) { badge.textContent = 'CARREGANDO'; badge.style.color = 'var(--amber)'; }
 
   const gmErr = [];
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  if (!_gmPollingActive) await wait(4000);   // 1ª carga: evita a rajada inicial de chamadas Finnhub
   const fq = sym => fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(sym)}&token=${S.apiKey}`, { cache:'no-store', signal: AbortSignal.timeout(10000) })
     .then(async r => {
       const j = await r.json().catch(() => null);
@@ -3370,8 +3389,10 @@ async function loadGlobalMarkets() {
 
   // O plano free da Finnhub NÃO entrega índices (INDEX:*) → ETFs como proxy. Em 3 ondas (evita rajada de 11 chamadas).
   const [spx, comp, ndx, dji]  = await Promise.all([fq('SPY'), fq('ONEQ'), fq('QQQ'), fq('DIA')]);
+  await wait(1200);
   const [ni225, topx, dax, ewz] = await Promise.all([fq('EWJ'), fq('VGK'), fq('EWG'), fq('EWZ')]);
   // Commodities: tenta o spot OANDA (como na versão original) e só então o ETF
+  await wait(1200);
   let [brent, gold, btc] = await Promise.all([fq('OANDA:BCO_USD'), fq('OANDA:XAU_USD'), fq('BINANCE:BTCUSDT')]);
   if (!brent) brent = await fq('BNO');
   if (!gold)  gold  = await fq('GLD');
@@ -4361,8 +4382,8 @@ function saveAgendaEditor() {
 // ── Notificar semana nova ─────────────────────────────
 function aeCheckNewWeek() {
   const saved = aeLoad();
-  if (!saved) {
-    // Sem dados para semana atual — mostrar aviso no badge
+  if (!saved && !AGENDA_DATA.length) {
+    // Só avisa se não há NENHUM evento (nem automático, nem manual)
     const dot = document.getElementById('ffStatusDot');
     const txt = document.getElementById('ffStatusTxt');
     if (dot) dot.style.background = 'var(--amber)';
@@ -4844,4 +4865,3 @@ log('DXY ICE/USDX 6-pares: EUR·JPY·GBP·CAD·SEK·CHF · Fórmula geométrica 
 </script>
 </body>
 </html>
-
