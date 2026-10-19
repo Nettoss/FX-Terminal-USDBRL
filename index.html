@@ -2811,12 +2811,12 @@ async function loadBCB() {
   log('Conectando à API BCB (api.bcb.gov.br)...', 'log-c');
   setWs('bcb','CARREGANDO','var(--amber)');
 
-  const safe = (promise, fallback) => promise.catch(() => fallback);
+  const safe = (promise, fallback) => promise.catch(e => { log('BCB SGS: ' + (e.name === 'TimeoutError' ? 'tempo esgotado' : (e.message || e.name)), 'log-y'); return fallback; });
 
   const [selicR, ipcaR, ptaxR] = await Promise.all([
-    safe(fetch('https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados/ultimos/1?formato=json').then(r=>r.json()), null),
-    safe(fetch('https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados/ultimos/12?formato=json').then(r=>r.json()), null),
-    safe(fetch('https://api.bcb.gov.br/dados/serie/bcdata.sgs.1/dados/ultimos/5?formato=json').then(r=>r.json()), null),
+    safe(qfetch('https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados/ultimos/1?formato=json').then(r=>r.json()), null),
+    safe(qfetch('https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados/ultimos/12?formato=json').then(r=>r.json()), null),
+    safe(qfetch('https://api.bcb.gov.br/dados/serie/bcdata.sgs.1/dados/ultimos/5?formato=json').then(r=>r.json()), null),
   ]);
 
   const num = v => { const x = parseFloat(String(v ?? '').replace(',','.')); return isNaN(x) ? null : x; };
@@ -3032,7 +3032,7 @@ async function loadDadosMercado() {
 
   const safe = async (url, label = 'Olinda/SGS') => {
     try {
-      const r = await fetch(url, { cache:'no-store', signal: AbortSignal.timeout(12000) });
+      const r = await qfetch(url, { cache:'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return await r.json();
     } catch(e) {
@@ -3045,7 +3045,7 @@ async function loadDadosMercado() {
   // ── Buscar em paralelo ────────────────────────────────
   const today = new Date().toISOString().slice(0,10);
   const FOCUS_YR = new Date().getFullYear();
-  const focusUrl = ind => `https://olinda.bcb.gov.br/olinda/servico/Expectativas/versao/v1/odata/ExpectativaMercadoAnuais?$top=1&$filter=${encodeURIComponent(`Indicador eq '${ind}' and DataReferencia eq '${FOCUS_YR}' and baseCalculo eq 0`)}&$orderby=Data%20desc&$format=json&$select=Indicador,Data,DataReferencia,Mediana`;
+  const focusUrl = ind => `https://olinda.bcb.gov.br/olinda/servico/Expectativas/versao/v1/odata/ExpectativasMercadoAnuais?$top=1&$filter=${encodeURIComponent(`Indicador eq '${ind}' and DataReferencia eq '${FOCUS_YR}' and baseCalculo eq 0`)}&$orderby=Data%20desc&$format=json&$select=Indicador,Data,DataReferencia,Mediana`;
   const focusSelicUrl = focusUrl('Selic');
   const focusIpcaUrl  = focusUrl('IPCA');
 
@@ -3391,11 +3391,9 @@ async function loadGlobalMarkets() {
   const [spx, comp, ndx, dji]  = await Promise.all([fq('SPY'), fq('ONEQ'), fq('QQQ'), fq('DIA')]);
   await wait(1200);
   const [ni225, topx, dax, ewz] = await Promise.all([fq('EWJ'), fq('VGK'), fq('EWG'), fq('EWZ')]);
-  // Commodities: tenta o spot OANDA (como na versão original) e só então o ETF
+  // Commodities: o spot OANDA devolve HTTP 403 no plano free → ETFs (BNO = Brent, GLD = ouro)
   await wait(1200);
-  let [brent, gold, btc] = await Promise.all([fq('OANDA:BCO_USD'), fq('OANDA:XAU_USD'), fq('BINANCE:BTCUSDT')]);
-  if (!brent) brent = await fq('BNO');
-  if (!gold)  gold  = await fq('GLD');
+  const [brent, gold, btc] = await Promise.all([fq('BNO'), fq('GLD'), fq('BINANCE:BTCUSDT')]);
 
   let hits = 0;
   const store = (key, data) => { if (data) { GM_DATA[key] = { ...data, proxy: !/^(OANDA|BINANCE):/.test(data.src || '') }; hits++; } };
@@ -3478,7 +3476,7 @@ async function buildDiffChart(selic, fed) {
   const selicBy = new Map(), fedBy = new Map();
   try {
     const f = d => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
-    const r = await fetch(`https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados?formato=json&dataInicial=${f(months[0])}&dataFinal=${f(new Date())}`);
+    const r = await qfetch(`https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados?formato=json&dataInicial=${f(months[0])}&dataFinal=${f(new Date())}`);
     (await r.json()).forEach(x => { const [dd,mm,yy] = x.data.split('/'); selicBy.set(`${yy}-${mm}`, parseFloat(x.valor)); });
   } catch(_) {}
   let fedReal = false;
@@ -3595,10 +3593,10 @@ function connectWS() {
 function onTrade(t) {
   const p = t.p, ts = t.t || Date.now();
   const sym = t.s || '';
+  if (!t.rest) S.lastWs[sym] = Date.now();   // marca que há tick ao vivo deste par
 
   // ── USD/BRL (proxy WDO) ──────────────────────────────
   if (sym.includes('USD_BRL') || sym.includes('USDBRL')) {
-    if (!t.rest) S.lastWs[sym] = Date.now();
     // Prioridade de fonte: WDO B3 (Brapi) quando ativo e recente. OANDA vira só referência spot,
     // evitando misturar spot e futuro na mesma série de candles (bug anterior).
     if (BRAPI_WDO_TICKER && (Date.now() - LAST_BRAPI_TS) < 120000) { S.spot = p; return; }
@@ -3655,6 +3653,22 @@ function onTrade(t) {
 
 // ── Gera candles sintéticos a partir de um valor âncora ──────────────────
 // Usado quando o plano Finnhub free bloqueia o endpoint /forex/candle
+function seedWhenLive(restOk, d, w) {
+  if (restOk) return seedSyntheticCandles(d, w);
+  // Sem quote REST (OANDA devolve 403 no plano free) os valores d/w são constantes antigas.
+  // Espera até 25 s pelos ticks reais do WebSocket antes de ancorar o histórico sintético.
+  const pairs = ['EUR_USD','USD_JPY','GBP_USD','USD_CAD','USD_SEK','USD_CHF','USD_BRL'];
+  let tries = 0;
+  const iv = setInterval(() => {
+    const fresh = pairs.filter(p => Date.now() - (S.lastWs['OANDA:' + p] || 0) < 15000).length;
+    if (fresh >= 7 || ++tries >= 25) {
+      clearInterval(iv);
+      if (fresh >= 7) seedSyntheticCandles(calcDXY(), S.price.wdo || w);
+      else { log('Sem ticks ao vivo (mercado fechado?) — histórico ancorado em valores de referência antigos', 'log-y'); seedSyntheticCandles(d, w); }
+    }
+  }, 1000);
+}
+
 function seedSyntheticCandles(anchorDxy, anchorWdo) {
   // Limpar histórico existente para evitar duplicatas
   CANDLES.dxy.length = 0;
@@ -3741,7 +3755,8 @@ function fetchHistorical() {
     S.price.dxy = dxyNow;
     const livePairs = ['eurusd','usdjpy','gbpusd','usdcad','usdsek','usdchf'].filter(k=>S.fx[k]).length;
     updateTicker('dxy', dxyNow, prevD || dxyNow*0.9995, 2, `ICE ${livePairs}/6`);
-    log(`Quotes REST: DXY=${dxyNow} (${livePairs}/6 pares) · USD/BRL=${wdoNow}`, 'log-g');
+    const restOk = livePairs >= 5 && wdoD?.c > 0;
+    log(`Quotes REST: DXY=${dxyNow} (${livePairs}/6 pares) · USD/BRL=${wdoNow}${restOk ? '' : ' — REST indisponível (valores de referência); aguardando ticks ao vivo'}`, restOk ? 'log-g' : 'log-y');
 
     // Passo 2: tentar candle REST (só funciona em planos pagos / alguns gratuitos)
     const from = Math.floor((Date.now() - 2*86400000) / 1000);
@@ -3792,17 +3807,17 @@ function fetchHistorical() {
       } else {
         // ❌ Candle REST bloqueado (plano free) — usar sintético calibrado
         log('Histórico candle: plano free — gerando histórico sintético calibrado...', 'log-y');
-        seedSyntheticCandles(dxyNow, wdoNow);
+        seedWhenLive(restOk, dxyNow, wdoNow);
       }
     }).catch(() => {
       log('Histórico: erro de rede — gerando histórico sintético...', 'log-y');
-      seedSyntheticCandles(dxyNow, wdoNow);
+      seedWhenLive(restOk, dxyNow, wdoNow);
     });
   }).catch(() => {
     // Quote também falhou — seed com fallbacks calibrados
     log('Histórico: sem dados REST — usando fallbacks calibrados', 'log-y');
     const dxyFallback = calcDXY();
-    seedSyntheticCandles(dxyFallback, S.price.wdo || 5.85);
+    seedWhenLive(false, dxyFallback, S.price.wdo || 5.85);
   });
 }
 
@@ -4398,6 +4413,28 @@ function localISO(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padSt
 const MES3 = ['JAN','FEV','MAR','ABR','MAI','JUN','JUL','AGO','SET','OUT','NOV','DEZ'];
 
 /* ── Fetch com cache (localStorage), deduplicação e DIAGNÓSTICO do motivo da falha ── */
+const _q = { active: 0, wait: [] };
+function qfetch(url, opts = {}, tries = 3, timeout = 20000) {
+  // No máx. 2 requisições simultâneas + até 3 tentativas com espera — o SGS/Olinda do BCB
+  // estoura timeout quando recebe várias chamadas de uma vez (era a causa de "BCB indisponível").
+  return new Promise((resolve, reject) => {
+    const run = async () => {
+      _q.active++;
+      try {
+        let lastErr;
+        for (let i = 0; i < tries; i++) {
+          try {
+            const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(timeout) });
+            if (r.status === 429 || r.status >= 500) throw Object.assign(new Error('HTTP ' + r.status), { http: r.status });
+            resolve(r); return;
+          } catch(e) { lastErr = e; if (i < tries - 1) await new Promise(res => setTimeout(res, 1500 * (i + 1))); }
+        }
+        reject(lastErr);
+      } finally { _q.active--; const next = _q.wait.shift(); if (next) next(); }
+    };
+    if (_q.active < 2) run(); else _q.wait.push(run);
+  });
+}
 const _inflight = {};
 function cachedJSON(key, ttlMs, url, label) {
   if (_inflight[key]) return _inflight[key];
@@ -4410,7 +4447,7 @@ async function _cachedJSON(key, ttlMs, url, label) {
   try { cached = JSON.parse(localStorage.getItem(key) || 'null'); } catch(_) {}
   if (cached && (now - cached.ts) < ttlMs) { delete S.diag[label]; return { data: cached.data, from: 'cache' }; }
   try {
-    const r = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+    const r = /bcb\.gov\.br/.test(url) ? await qfetch(url, { cache: 'no-store' }) : await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
     if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { http: r.status });
     const data = await r.json();
     try { localStorage.setItem(key, JSON.stringify({ ts: now, data })); } catch(_) {}
