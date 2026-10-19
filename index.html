@@ -2882,7 +2882,7 @@ async function loadFRED() {
   if (!isNaN(manual)) { S.fed = manual; S.fedSrc = 'manual'; }
   if (!FRED_KEY) return;
   const get = async (id) => {
-    const r = await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${id}&api_key=${encodeURIComponent(FRED_KEY)}&file_type=json&sort_order=desc&limit=7`, { cache:'no-store' });
+    const r = await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${id}&api_key=${encodeURIComponent(FRED_KEY)}&file_type=json&sort_order=desc&limit=7`, { cache:'no-store', signal: AbortSignal.timeout(8000) });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
     const o = (j.observations || []).find(x => x.value !== '.' && !isNaN(parseFloat(x.value)));
@@ -3010,13 +3010,19 @@ async function loadDadosMercado() {
   const ts    = $('dmTs');
   if (badge) { badge.style.color='var(--amber)'; badge.textContent='CARREGANDO'; }
   log('BCB Olinda: buscando Focus + Fluxo + IGP-M...', 'log-c');
+  // espera o loadBCB (SELIC/IPCA) para o fallback não ler dados vazios (máx. 12 s)
+  await Promise.race([Promise.resolve(S.bcbReady).catch(() => {}), new Promise(r => setTimeout(r, 12000))]);
 
-  const safe = async (url) => {
+  const safe = async (url, label = 'Olinda/SGS') => {
     try {
-      const r = await fetch(url, { cache:'no-store' });
+      const r = await fetch(url, { cache:'no-store', signal: AbortSignal.timeout(12000) });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return await r.json();
-    } catch(e) { return null; }
+    } catch(e) {
+      const why = (e.name === 'TypeError') ? 'bloqueio CORS ou rede' : e.name === 'TimeoutError' ? 'tempo esgotado' : e.message;
+      log(`${label}: ${why}`, 'log-y');
+      return null;
+    }
   };
 
   // ── Buscar em paralelo ────────────────────────────────
@@ -3037,11 +3043,11 @@ async function loadDadosMercado() {
   const igpmUrl = 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.189/dados/ultimos/3?formato=json';
 
   const [focusSelicRaw, focusIpcaRaw, fluxoRaw1, fluxoRaw2, igpmRaw] = await Promise.all([
-    safe(focusSelicUrl),
-    safe(focusIpcaUrl),
-    safe(fluxoUrl1),
-    safe(fluxoUrl2),
-    safe(igpmUrl),
+    safe(focusSelicUrl, 'Focus SELIC'),
+    safe(focusIpcaUrl, 'Focus IPCA'),
+    safe(fluxoUrl1, 'Fluxo cambial (24369)'),
+    safe(fluxoUrl2, 'Fluxo cambial (28505)'),
+    safe(igpmUrl, 'IGP-M'),
   ]);
 
   let anyOk = false;
@@ -3314,7 +3320,7 @@ function gmRender() {
   // ── Coluna Commodities + BTC ─────────────────────────
   const commEl = document.getElementById('gm-comm-body');
   if (commEl) commEl.innerHTML = [
-    gmRow(d.wti?.proxy ? 'Brent · BNO' : 'WTI Crude', 'wti',  d.wti?.c,  d.wti?.d,  d.wti?.dp,  2, 'US$'),
+    gmRow(d.wti?.proxy ? 'Brent · BNO' : (d.wti?.src ? 'Brent Crude' : 'WTI Crude'), 'wti',  d.wti?.c,  d.wti?.d,  d.wti?.dp,  2, 'US$'),
     gmRow(gmLb('Gold Spot','gold','GLD'), 'gold', d.gold?.c, d.gold?.d, d.gold?.dp, 2, 'US$'),
     gmRow('Bitcoin',     'btc',  d.btc?.c,  d.btc?.d,  d.btc?.dp,  0, 'US$'),
   ].join('');
@@ -3351,22 +3357,27 @@ async function loadGlobalMarkets() {
   const badge = document.getElementById('gmBadge');
   if (badge) { badge.textContent = 'CARREGANDO'; badge.style.color = 'var(--amber)'; }
 
-  const fq = sym => fetch(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${S.apiKey}`, {cache:'no-store'})
-    .then(r => r.json())
-    .then(d => d?.c > 0 ? d : null)
-    .catch(() => null);
+  const gmErr = [];
+  const fq = sym => fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(sym)}&token=${S.apiKey}`, { cache:'no-store', signal: AbortSignal.timeout(10000) })
+    .then(async r => {
+      const j = await r.json().catch(() => null);
+      if (!r.ok)       { gmErr.push(`${sym}: HTTP ${r.status}${j?.error ? ' (' + j.error + ')' : ''}`); return null; }
+      if (j?.error)    { gmErr.push(`${sym}: ${j.error}`); return null; }
+      if (!(j?.c > 0)) { gmErr.push(`${sym}: sem cotação`); return null; }
+      return { ...j, src: sym };
+    })
+    .catch(() => { gmErr.push(`${sym}: rede/CORS`); return null; });
 
-  // O plano free da Finnhub NÃO entrega índices (INDEX:*) — por isso as linhas ficavam vazias.
-  // Usa ETFs líquidos como proxy (variação % praticamente igual; o preço mostrado é o do ETF).
-  // 11 requests em paralelo, dentro do limite free (60/min).
-  const [spx, comp, ndx, dji, ni225, topx, dax, brent, gold, btc, ewz] = await Promise.all([
-    fq('SPY'),   fq('ONEQ'), fq('QQQ'),  fq('DIA'),
-    fq('EWJ'),   fq('VGK'),  fq('EWG'),
-    fq('BNO'),   fq('GLD'),  fq('BINANCE:BTCUSDT'), fq('EWZ'),
-  ]);
+  // O plano free da Finnhub NÃO entrega índices (INDEX:*) → ETFs como proxy. Em 3 ondas (evita rajada de 11 chamadas).
+  const [spx, comp, ndx, dji]  = await Promise.all([fq('SPY'), fq('ONEQ'), fq('QQQ'), fq('DIA')]);
+  const [ni225, topx, dax, ewz] = await Promise.all([fq('EWJ'), fq('VGK'), fq('EWG'), fq('EWZ')]);
+  // Commodities: tenta o spot OANDA (como na versão original) e só então o ETF
+  let [brent, gold, btc] = await Promise.all([fq('OANDA:BCO_USD'), fq('OANDA:XAU_USD'), fq('BINANCE:BTCUSDT')]);
+  if (!brent) brent = await fq('BNO');
+  if (!gold)  gold  = await fq('GLD');
 
   let hits = 0;
-  const store = (key, data) => { if (data) { GM_DATA[key] = { ...data, proxy: key !== 'btc' }; hits++; } };
+  const store = (key, data) => { if (data) { GM_DATA[key] = { ...data, proxy: !/^(OANDA|BINANCE):/.test(data.src || '') }; hits++; } };
 
   store('spx',   spx);
   store('comp',  comp);
@@ -3379,6 +3390,7 @@ async function loadGlobalMarkets() {
   store('gold',  gold);
   store('btc',   btc);
   store('bvsp',  ewz);   // proxy; se houver chave Brapi, o valor real do ^BVSP sobrescreve abaixo
+  if (gmErr.length && Date.now() - _gmErrLog > 600000) { _gmErrLog = Date.now(); log('Mercados Globais — falhas Finnhub: ' + gmErr.slice(0, 6).join(' · '), 'log-y'); }
 
   // BVSP sempre via Brapi (Finnhub não tem ^BVSP grátis)
   await loadGlobalMarketsBrapi();
@@ -3402,30 +3414,36 @@ async function loadGlobalMarkets() {
   }
 }
 
+let _gmErrLog = 0, _brapiBvspTs = 0, _brapiGmTs = 0;
+const _brapiErr = {};
 async function loadGlobalMarketsBrapi() {
-  // Brapi: BVSP + fallbacks para Gold e BTC se Finnhub falhar
   if (!BRAPI_KEY) return;
-  const toFetch = ['^BVSP','GC=F','BTC-USD','CL=F'];   // dados reais substituem os ETFs proxy
-
-  try {
-    const tickers = toFetch.join(',');
-    const r = await fetch(`${BRAPI_BASE}/quote/${tickers}?token=${BRAPI_KEY}&fundamental=false`, {cache:'no-store'});
-    if (!r.ok) return;
-    const data = await r.json();
-    (data.results || []).forEach(item => {
-      const c   = item.regularMarketPrice;
-      const pc  = item.regularMarketPreviousClose || c;
-      const d   = c && pc ? +(c - pc).toFixed(2) : null;
-      const dp  = c && pc ? +((c - pc) / pc * 100).toFixed(2) : null;
-      if (!c) return;
-      const obj = { c, d, dp, pc, proxy:false };
-      if (item.symbol === '^BVSP')    GM_DATA.bvsp = obj;
-      if (item.symbol === 'GC=F')     GM_DATA.gold = obj;
-      if (item.symbol === 'BTC-USD')  GM_DATA.btc  = obj;
-      if (item.symbol === 'CL=F')     GM_DATA.wti  = obj;   // WTI (o proxy BNO é Brent)
-    });
-  } catch(e) {
-    log('Brapi GlobalMarkets: ' + e.message, 'log-y');
+  // Um ticker por requisição (o plano free não aceita lista) e com poupança de cota:
+  // fora do pregão consulta o Ibovespa no máx. a cada 10 min.
+  const one = async (tk) => {
+    try {
+      const r = await fetch(`${BRAPI_BASE}/quote/${encodeURIComponent(tk)}?token=${BRAPI_KEY}&fundamental=false`, { cache:'no-store', signal: AbortSignal.timeout(10000) });
+      if (!r.ok) { if (_brapiErr[tk] !== r.status) { _brapiErr[tk] = r.status; log(`Brapi ${tk}: HTTP ${r.status}${r.status === 429 || r.status === 402 ? ' (cota/plano)' : ''}`, 'log-y'); } return null; }
+      delete _brapiErr[tk];
+      const j = await r.json();
+      return (j.results || [])[0] || null;
+    } catch(e) { return null; }
+  };
+  const mk = item => {
+    const c = item.regularMarketPrice, pc = item.regularMarketPreviousClose || c;
+    if (!c) return null;
+    return { c, d: +(c - pc).toFixed(2), dp: +((c - pc) / pc * 100).toFixed(2), pc, proxy: false };
+  };
+  if (isB3Open() || !_brapiBvspTs || Date.now() - _brapiBvspTs > 600000) {
+    _brapiBvspTs = Date.now();
+    const bv = await one('^BVSP'); const o = bv && mk(bv); if (o) GM_DATA.bvsp = o;
+  }
+  if (Date.now() - _brapiGmTs > 300000) {     // commodities/cripto reais: só se faltarem ou forem ETF proxy, a cada 5 min
+    _brapiGmTs = Date.now();
+    for (const [tk, key] of [['GC=F','gold'], ['CL=F','wti'], ['BTC-USD','btc']]) {
+      if (GM_DATA[key] && !GM_DATA[key].proxy) continue;
+      const it = await one(tk); const o = it && mk(it); if (o) GM_DATA[key] = o;
+    }
   }
 }
 
@@ -3871,7 +3889,7 @@ function startWithKey() {
   $('apiModal').style.display = 'none';
   setText('ws-mode','LIVE');
   log('Modo LIVE com chave Finnhub ✓','log-g');
-  initCharts(); loadBCB(); loadDadosMercado(); buildWeeklyAgenda(); buildCalendar(); connectWS(); startBrapiPolling(); startResultsPolling(); enableManualResults();
+  initCharts(); S.bcbReady = loadBCB(); loadDadosMercado(); buildWeeklyAgenda(); buildCalendar(); connectWS(); startBrapiPolling(); startResultsPolling(); enableManualResults();
   setTimeout(loadGlobalMarkets, 3000); // delay 3s para garantir S.apiKey disponível
   setInterval(loadBCB, 15*60*1000);
   setInterval(buildWeeklyAgenda, 7*24*60*60*1000);
@@ -3890,7 +3908,7 @@ function startDemo() {
   setLivePill('demo');
   setAlert('⚠ Modo DEMO ativo. Insira chave Finnhub para dados reais.', true);
   log('Modo DEMO iniciado','log-y');
-  initCharts(); loadBCB(); loadDadosMercado(); buildWeeklyAgenda(); buildCalendar(); seedDemo(); runDemoTicker(); startBrapiPolling(); startResultsPolling(); enableManualResults();
+  initCharts(); S.bcbReady = loadBCB(); loadDadosMercado(); buildWeeklyAgenda(); buildCalendar(); seedDemo(); runDemoTicker(); startBrapiPolling(); startResultsPolling(); enableManualResults();
   setTimeout(loadGlobalMarkets, 2000); // carrega com Brapi mesmo sem chave Finnhub
   setInterval(loadBCB, 15*60*1000);
   setInterval(buildWeeklyAgenda, 7*24*60*60*1000);
@@ -3986,9 +4004,7 @@ let _agendaLoading = false;
 // ── Renderizar o HTML da agenda a partir de AGENDA_DATA ─
 function renderAgenda() {
   const now = new Date();
-  const dow = now.getDay();
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
+  const monday = getMonday();   // mesma semana usada para buscar os eventos (sáb/dom = próxima semana)
 
   function fmt(d) {
     return d.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
@@ -4373,7 +4389,7 @@ async function _cachedJSON(key, ttlMs, url, label) {
   try { cached = JSON.parse(localStorage.getItem(key) || 'null'); } catch(_) {}
   if (cached && (now - cached.ts) < ttlMs) { delete S.diag[label]; return { data: cached.data, from: 'cache' }; }
   try {
-    const r = await fetch(url, { cache: 'no-store' });
+    const r = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
     if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { http: r.status });
     const data = await r.json();
     try { localStorage.setItem(key, JSON.stringify({ ts: now, data })); } catch(_) {}
@@ -4382,6 +4398,7 @@ async function _cachedJSON(key, ttlMs, url, label) {
   } catch(e) {
     const why = e.http === 429 ? 'limite de requisições (HTTP 429) — aguarde alguns minutos'
               : e.http         ? 'HTTP ' + e.http
+              : e.name === 'TimeoutError' ? 'tempo esgotado (10 s) — servidor lento ou fora do ar'
               : ((e.name === 'TypeError' || /failed to fetch|networkerror/i.test(e.message)) ? 'bloqueio CORS ou rede (o navegador impediu a leitura)' : e.message);
     S.diag[label] = why;
     log(`${label}: ${why}${cached ? ' — usando cache antigo' : ''}`, 'log-y');
@@ -4508,8 +4525,9 @@ async function brAutoAgenda() {
 
 function mergeAgenda(manual, auto) {
   const key = ev => `${ev.d.toDateString()}|${ev.h}|${String(ev.n).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8)}`;
-  const seen = new Set(manual.map(key));                       // evento manual tem prioridade
-  return [...manual, ...auto.filter(ev => !seen.has(key(ev)))].sort((a, b) => a.d - b.d || a.h.localeCompare(b.h));
+  const seen = new Set(), out = [];
+  [...manual, ...auto].forEach(ev => { const k = key(ev); if (!seen.has(k)) { seen.add(k); out.push(ev); } });   // manual vem primeiro = prioridade
+  return out.sort((a, b) => a.d - b.d || a.h.localeCompare(b.h));
 }
 
 async function buildWeeklyAgenda() {
@@ -4518,12 +4536,19 @@ async function buildWeeklyAgenda() {
   try {
     const saved  = aeLoad();
     const manual = saved && saved.length ? aeToAgenda(saved) : [];
-    const [us, br] = await Promise.all([ffAutoAgenda(), brAutoAgenda()]);
-    AGENDA_DATA = mergeAgenda(manual, [...us, ...br]);
-    AGENDA_DATA.forEach(ev => { if (ev.res) saveResult(ev, ev.res); });
-    log(`📋 Agenda: ${AGENDA_DATA.length} eventos (EUA ${us.length} · Brasil ${br.length} · manual ${manual.length})`, AGENDA_DATA.length ? 'log-g' : 'log-y');
-    setFFStatus(us.length ? 'ok' : (AGENDA_DATA.length ? 'partial' : 'error'));
-    renderAgenda();
+    const parts  = { us: [], br: [], bcb: bcbAgenda() };
+    const apply  = () => {
+      AGENDA_DATA = mergeAgenda(manual, [...parts.us, ...parts.br, ...parts.bcb]);
+      AGENDA_DATA.forEach(ev => { if (ev.res) saveResult(ev, ev.res); });
+      renderAgenda();
+    };
+    apply();   // eventos fixos (Copom/Focus) e manuais aparecem NA HORA, sem esperar a internet
+    await Promise.all([
+      ffAutoAgenda().then(us => { parts.us = us; apply(); }),
+      brAutoAgenda().then(br => { parts.br = br; apply(); }),
+    ]);
+    log(`📋 Agenda: ${AGENDA_DATA.length} eventos (EUA ${parts.us.length} · Brasil ${parts.br.length} · manual ${manual.length})`, AGENDA_DATA.length ? 'log-g' : 'log-y');
+    setFFStatus(parts.us.length ? 'ok' : (S.diag['ForexFactory'] ? 'error' : 'partial'));
     aeCheckNewWeek();
   } catch(e) {
     log('Agenda: ' + e.message, 'log-r');
