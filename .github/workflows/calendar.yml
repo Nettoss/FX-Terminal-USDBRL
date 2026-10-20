@@ -1,7 +1,11 @@
+# Arquivo: .github/workflows/calendar.yml
+# Baixa NO SERVIDOR do GitHub (sem CORS):
+#   1) ff_calendar.json — calendário econômico semanal (ForexFactory)
+#   2) us10y.json       — rendimento do Treasury de 10 anos (Tesouro dos EUA, fechamento diário)
 name: Atualizar calendario economico
 on:
   schedule:
-    - cron: '*/30 10-23 * * 1-5'
+    - cron: '*/30 10-23 * * 1-5'   # a cada 30 min, seg-sex (horário UTC)
   workflow_dispatch: {}
 permissions:
   contents: write
@@ -10,15 +14,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Baixar calendario
         run: |
           curl -fsSL --retry 3 -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36" \
             "https://nfs.faireconomy.media/ff_calendar_thisweek.json" -o ff_calendar.json.tmp
           python3 -c "import json; d=json.load(open('ff_calendar.json.tmp')); assert isinstance(d,list) and d"
           mv ff_calendar.json.tmp ff_calendar.json
+
+      - name: Baixar US10Y (Tesouro EUA)
+        continue-on-error: true
+        run: |
+          YEAR=$(date +%Y)
+          curl -fsSL --retry 3 -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36" \
+            "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/${YEAR}/all?type=daily_treasury_yield_curve&field_tdr_date_value=${YEAR}&page&_format=csv" -o ust.csv
+          python3 - <<'PY'
+          import csv, json
+          from datetime import datetime
+          rows = list(csv.DictReader(open('ust.csv', encoding='utf-8-sig')))
+          col = next(k for k in rows[0] if k.strip().lower().startswith('10 y'))
+          def val(r):
+              try: return float(r[col])
+              except Exception: return None
+          rows = [r for r in rows if val(r) is not None]
+          rows.sort(key=lambda r: datetime.strptime(r['Date'].strip(), '%m/%d/%Y'))
+          last = rows[-1]; prev = rows[-2] if len(rows) > 1 else rows[-1]
+          out = {'date': datetime.strptime(last['Date'].strip(), '%m/%d/%Y').strftime('%Y-%m-%d'),
+                 'us10y': val(last), 'prev': val(prev), 'source': 'US Treasury par yield curve'}
+          json.dump(out, open('us10y.json', 'w'))
+          print(out)
+          PY
+
       - name: Commit
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add ff_calendar.json
-          git diff --cached --quiet || (git commit -m "calendario: atualizacao automatica" && git push)
+          if [ -f us10y.json ]; then git add us10y.json; fi
+          git diff --cached --quiet || (git commit -m "dados: atualizacao automatica" && git push)
