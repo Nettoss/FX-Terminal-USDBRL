@@ -897,6 +897,7 @@ footer {
       <input class="modal-input" id="brapiKeyInput" type="password" autocomplete="off" placeholder="Brapi API Key (opcional — WDO B3 / BVSP)" style="margin:0">
       <input class="modal-input" id="fredKeyInput"  type="password" autocomplete="off" placeholder="FRED API Key (opcional — Fed Funds e US10Y)" style="margin:0">
       <input class="modal-input" id="fedManualInput" type="text" inputmode="decimal" placeholder="Fed Funds manual, ex.: 3.75 (opcional — sobrepõe o FRED)" style="margin:0">
+      <input class="modal-input" id="us10yManualInput" type="text" inputmode="decimal" placeholder="US10Y manual, ex.: 4.25 (opcional — sobrepõe o automático)" style="margin:0">
       <div style="font-size:10px;color:var(--t4)">🔒 Chaves ficam só no localStorage deste navegador — nunca no código do GitHub.</div>
     </div></details>
 
@@ -984,7 +985,7 @@ footer {
     </div>
 
     <div class="tcard tc-cyan">
-      <div class="tc-label">CORR DXY×WDO 20P</div>
+      <div class="tc-label">CORR DXY×WDO 10MIN</div>
       <div class="tc-value flat" id="v-corr">—</div>
       <div class="tc-change flat">Rolling Pearson</div>
     </div>
@@ -1047,7 +1048,7 @@ footer {
     <div class="panel">
       <div class="panel-head">
         <div class="panel-title">CORRELAÇÃO DINÂMICA</div>
-        <div class="ptag" style="color:var(--teal);border:1px solid rgba(0,255,204,0.3);background:rgba(0,255,204,0.08)">RETORNOS 1MIN</div>
+        <div class="ptag" style="color:var(--teal);border:1px solid rgba(0,255,204,0.3);background:rgba(0,255,204,0.08)">RETORNOS 15S</div>
       </div>
       <div class="panel-body" style="padding:10px 14px">
         <!-- Compact correlation display -->
@@ -1060,7 +1061,7 @@ footer {
             <div style="font-size:10px;color:var(--t4);letter-spacing:1px;margin-bottom:4px">TENDÊNCIA</div>
             <div style="font-size:12px;font-weight:700" id="corr-trend">—</div>
             <div style="font-size:10px;color:var(--t4);margin-top:6px;letter-spacing:1px">PERÍODO</div>
-            <div style="font-size:12px;font-weight:700;color:var(--t2)">30 AMOSTRAS</div>
+            <div style="font-size:12px;font-weight:700;color:var(--t2)">40 AMOSTRAS</div>
           </div>
         </div>
         <canvas id="chartCorr" height="31" style="max-height:31px"></canvas>
@@ -1650,6 +1651,7 @@ function getResult(ev) {
 const BRAPI_KEY_STORAGE = 'fxterminal_brapikey';
 const FRED_KEY_STORAGE  = 'fxterminal_fredkey';
 const FED_MANUAL_STORAGE = 'fxterminal_fed_manual';
+const US10Y_MANUAL_STORAGE = 'fxterminal_us10y_manual';
 function lsGet(k){ try { return localStorage.getItem(k) || ''; } catch(_) { return ''; } }
 function lsSet(k,v){ try { if (v) localStorage.setItem(k,v); } catch(_) {} }
 // ── CHAVES OPCIONAIS EMBUTIDAS ─────────────────────────────────────────────
@@ -2371,10 +2373,10 @@ function logRet(a){ const o=[]; for(let i=1;i<a.length;i++){ if(a[i]>0&&a[i-1]>0
 function sampleTick() {
   if (S.price.dxy && S.price.wdo) {
     S.samp.dxy.push(S.price.dxy); S.samp.wdo.push(S.price.wdo);
-    if (S.samp.dxy.length > 90) { S.samp.dxy.shift(); S.samp.wdo.shift(); }
+    if (S.samp.dxy.length > 120) { S.samp.dxy.shift(); S.samp.wdo.shift(); }
   }
 }
-setInterval(sampleTick, 60000);
+setInterval(sampleTick, 15000);   // amostra a cada 15 s (antes 60 s → ~11 min de espera)
 let _lastCorrPush = 0;
 function computeCorr() {
   let a, b;
@@ -2383,15 +2385,16 @@ function computeCorr() {
     const pairs = CANDLES.dxy.filter(c => mw.has(c.bar)).map(c => [c.c, mw.get(c.bar)]);
     a = logRet(pairs.map(p=>p[0])); b = logRet(pairs.map(p=>p[1]));
   } else { a = logRet(S.samp.dxy); b = logRet(S.samp.wdo); }
-  const n = Math.min(a.length, b.length, 30);
-  if (n < 10) return { r:null, n };
+  const n = Math.min(a.length, b.length, 40);
+  if (n < 12) return { r:null, n };
   return { r: pearson(a, b, n), n };
 }
 function updateCorr() {
   const { r, n } = computeCorr();
   if (r === null) {
     setText('corr-big', '—'); setText('v-corr', '—');
-    const d = $('corr-desc'); if (d) d.textContent = `Coletando amostras (retornos de 1 min): ${n}/10…`;
+    const d = $('corr-desc');
+    if (d) d.textContent = n >= 12 ? 'Sem variação nos preços do período (mercado parado/fechado?) — correlação indefinida.' : `Coletando amostras (retornos de 15 s): ${n}/12…`;
     return;
   }
   // histórico do gráfico: no máx. 1 ponto a cada 15s (antes empilhava um ponto por tick)
@@ -2808,6 +2811,7 @@ function buildCalendar() {
 /* ─── BCB API ─────────────────────────────────────────── */
 async function loadBCB() {
   await loadFRED();
+  await loadUS10Y();
   log('Conectando à API BCB (api.bcb.gov.br)...', 'log-c');
   setWs('bcb','CARREGANDO','var(--amber)');
 
@@ -2891,6 +2895,37 @@ async function loadBCB() {
   buildDITable(selic);
   buildSignals();
   buildMacroPerf();
+}
+
+/* ─── US10Y: valor manual → FRED → us10y.json (GitHub Actions, Tesouro EUA) ─── */
+function paintUS10Y() {
+  if (S.us10y == null) return;
+  setText('v-us10y', S.us10y.toFixed(3));
+  setText('mv-us10y', S.us10y.toFixed(3) + '%');
+  setBar('mg-us10y', (S.us10y / 10) * 100, 'var(--amber)');
+  const c = $('c-us10y');
+  if (c) {
+    if (S.us10yPrev != null) {
+      const d = S.us10y - S.us10yPrev, cls = d >= 0 ? 'up' : 'down';
+      const dt = S.us10yDate ? S.us10yDate.slice(5).split('-').reverse().join('/') : '';
+      c.innerHTML = `<span class="${cls}">${d >= 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(3)} · fech. ${esc(dt)}</span>`;
+    } else c.innerHTML = `<span class="flat">${esc(S.us10ySrc || '')}</span>`;
+  }
+}
+async function loadUS10Y() {
+  const manual = parseFloat(lsGet(US10Y_MANUAL_STORAGE).replace(',', '.'));
+  if (!isNaN(manual)) { S.us10y = manual; S.us10yPrev = null; S.us10ySrc = 'manual'; }
+  else if (S.us10y == null) {
+    try {
+      const r = await fetch('us10y.json?t=' + Math.floor(Date.now() / 600000), { cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j.us10y > 0) { S.us10y = j.us10y; S.us10yPrev = j.prev ?? null; S.us10yDate = j.date; S.us10ySrc = 'Tesouro EUA ' + j.date; delete S.diag['US10Y']; }
+      } else S.diag['US10Y'] = 'us10y.json indisponível (HTTP ' + r.status + ') — suba o workflow atualizado ou informe o valor manual';
+    } catch(_) { S.diag['US10Y'] = 'us10y.json não lido (abra pelo endereço do GitHub Pages; em arquivo local não funciona)'; }
+    if (S.us10y == null) log('US10Y: ' + (S.diag['US10Y'] || 'sem fonte'), 'log-y');
+  }
+  paintUS10Y();
 }
 
 /* ─── FRED (Fed Funds + US10Y) ───────────────────────── */
@@ -3908,6 +3943,8 @@ function saveExtraKeys() {
   if (b) { BRAPI_KEY = b; lsSet(BRAPI_KEY_STORAGE, b); }
   if (f) { FRED_KEY  = f; lsSet(FRED_KEY_STORAGE,  f); }
   try { if (m && !isNaN(parseFloat(m))) localStorage.setItem(FED_MANUAL_STORAGE, m); else localStorage.removeItem(FED_MANUAL_STORAGE); } catch(_) {}
+  const u = ($('us10yManualInput')?.value || '').trim().replace(',','.');
+  try { if (u && !isNaN(parseFloat(u))) localStorage.setItem(US10Y_MANUAL_STORAGE, u); else localStorage.removeItem(US10Y_MANUAL_STORAGE); } catch(_) {}
 }
 
 function startWithKey() {
@@ -4852,7 +4889,7 @@ window.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => { if ($('apiKeyInput')) $('apiKeyInput').style.color = 'var(--white)'; }, 1000);
   }
   // Pre-fill Brapi / FRED / Fed manual
-  [['brapiKeyInput', BRAPI_KEY_STORAGE], ['fredKeyInput', FRED_KEY_STORAGE], ['fedManualInput', FED_MANUAL_STORAGE]].forEach(([id, k]) => {
+  [['brapiKeyInput', BRAPI_KEY_STORAGE], ['fredKeyInput', FRED_KEY_STORAGE], ['fedManualInput', FED_MANUAL_STORAGE], ['us10yManualInput', US10Y_MANUAL_STORAGE]].forEach(([id, k]) => {
     const el = $(id); const v = lsGet(k); if (el && v) el.value = v;
   });
   // Pre-fill JBlanked key
