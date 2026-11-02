@@ -11,14 +11,16 @@
   "date": "2026-09-01"
  },
  "payroll": {
-  "change_k": 333,
-  "prev_change_k": 196,
-  "date": "2026-09-01"
+  "avg12_k": 42,
+  "prev_avg12_k": 40,
+  "date": "2026-09-01",
+  "prev_date": "2026-08-01"
  },
  "gdp": {
-  "qoq_ann": 4.93,
-  "prev_qoq_ann": 12.75,
-  "date": "2026-07-01"
+  "yoy": 2.22,
+  "prev_yoy": 2.42,
+  "date": "2026-07-01",
+  "prev_date": "2026-04-01"
  },
  "treasury": {
   "us10y": {
@@ -100,6 +102,6 @@
   "spread_10y_2y": 0.37,
   "spread_prev": 0.38
  },
- "updated": "2026-11-02T21:09:29Z",
+ "updated": "2026-11-02T21:51:12Z",
  "source": "Alpha Vantage"
 }
