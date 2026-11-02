@@ -9,7 +9,10 @@ de gráfico do Yahoo Finance (gratuito, sem chave).
 
 Fontes, em ordem, para cada ativo (a primeira que responder vale):
   1) Yahoo Finance (query1, depois query2)  — o GitHub às vezes recebe HTTP 429 (IP compartilhado)
-  2) Stooq (petróleo/ouro, CSV sem chave)  ·  Coinbase (Bitcoin, sem chave)
+  2) Stooq (petróleo/ouro, CSV sem chave)
+  3) Bitcoin → Coinbase · Ouro → PAXG-USD na Coinbase (token lastreado em 1 oz de ouro, ~spot)
+     Brent/WTI → Alpha Vantage (secret ALPHAVANTAGE_KEY; fechamento DIÁRIO, no máx. 1 consulta/6h por ativo
+     para não estourar o limite gratuito de 25/dia, já usado em parte pelo workflow macro.yml)
 Regra de segurança: se um ativo falhar em todas, mantém o valor anterior do arquivo.
 """
 import csv
@@ -105,10 +108,39 @@ def stooq(simbolo):
     return montar(preco, anterior, f"{q['Date']}T{q['Time']}Z")
 
 
-def coinbase_btc():
-    """Bitcoin: último preço vs abertura de 24h (Coinbase Exchange, sem chave)."""
-    j = json.loads(http("https://api.exchange.coinbase.com/products/BTC-USD/stats", "application/json"))
+def coinbase(produto):
+    """Último preço vs abertura de 24h (Coinbase Exchange, sem chave)."""
+    j = json.loads(http(f"https://api.exchange.coinbase.com/products/{produto}/stats", "application/json"))
     return montar(float(j["last"]), float(j["open"]), datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+
+ALPHA = {"BZ=F": "BRENT", "CL=F": "WTI"}
+ANTIGO_POR_SIMBOLO = {}      # preenchido em main() com o conteúdo anterior do arquivo
+AV_INTERVALO_S = 6 * 3600
+
+
+def alphavantage(simbolo):
+    """Brent/WTI: último fechamento diário vs anterior. Reaproveita o valor se consultado há <6h."""
+    ant = ANTIGO_POR_SIMBOLO.get(simbolo)
+    if ant and ant.get("via") == "alphavantage" and ant.get("fetched"):
+        try:
+            idade = time.time() - datetime.strptime(ant["fetched"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+            if idade < AV_INTERVALO_S:
+                return dict(ant)
+        except ValueError:
+            pass
+    chave = os.environ.get("ALPHAVANTAGE_KEY")
+    if not chave:
+        raise RuntimeError("secret ALPHAVANTAGE_KEY ausente")
+    j = json.loads(http(f"https://www.alphavantage.co/query?function={ALPHA[simbolo]}&interval=daily&apikey={chave}", "application/json"))
+    if not isinstance(j, dict) or "data" not in j:
+        raise RuntimeError(str(j.get("Information") or j.get("Note") or j.get("Error Message") or "resposta inesperada")[:90])
+    pts = sorted(((d["date"], float(d["value"])) for d in j["data"] if d.get("value") not in (None, "", ".")), reverse=True)
+    if len(pts) < 2:
+        raise ValueError("dados insuficientes")
+    bloco = montar(pts[0][1], pts[1][1], pts[0][0] + "T00:00:00Z")
+    bloco["fetched"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return bloco
 
 
 def obter(simbolo):
@@ -117,7 +149,11 @@ def obter(simbolo):
     if simbolo in STOOQ:
         tentativas.append(("stooq", lambda: stooq(simbolo)))
     if simbolo == "BTC-USD":
-        tentativas.append(("coinbase", coinbase_btc))
+        tentativas.append(("coinbase", lambda: coinbase("BTC-USD")))
+    if simbolo == "GC=F":
+        tentativas.append(("coinbase-paxg", lambda: coinbase("PAXG-USD")))
+    if simbolo in ALPHA:
+        tentativas.append(("alphavantage", lambda: alphavantage(simbolo)))
     erros = []
     for nome, fn in tentativas:
         try:
@@ -136,6 +172,9 @@ def main():
         pass
 
     saida = dict(antigo.get("data") or {})
+    for blk in saida.values():
+        if isinstance(blk, dict) and blk.get("symbol"):
+            ANTIGO_POR_SIMBOLO[blk["symbol"]] = blk
     ok = 0
     for i, (chave, simbolo) in enumerate(ATIVOS.items()):
         if i:
@@ -144,6 +183,7 @@ def main():
             bloco, fonte = obter(simbolo)
             bloco["symbol"] = simbolo
             bloco["via"] = fonte
+            bloco.setdefault("fetched", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
             saida[chave] = bloco
             ok += 1
             print(f"OK    {chave} ({simbolo}) via {fonte}: {bloco['c']} {bloco['dp']:+.2f}%")
@@ -158,7 +198,7 @@ def main():
     tmp = OUT + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                   "source": "Yahoo Finance / Stooq / Coinbase (futuros, equivalentes ao Investing.com)",
+                   "source": "Yahoo / Stooq / Coinbase / Alpha Vantage (equivalentes ao Investing.com)",
                    "data": saida}, f, ensure_ascii=False, indent=1)
     os.replace(tmp, OUT)
     print("commodities.json atualizado.")
