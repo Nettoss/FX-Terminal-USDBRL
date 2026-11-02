@@ -1,0 +1,36 @@
+# Arquivo: .github/workflows/commodities.yml
+# Baixa Brent, WTI, Ouro e Bitcoin NO SERVIDOR do GitHub e grava data/commodities.json.
+# Independente dos demais workflows. Sem chave/secret.
+name: Atualizar commodities
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # a cada 10 min (o GitHub pode atrasar alguns minutos)
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency:
+  group: commodities
+  cancel-in-progress: true
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Baixar commodities
+        run: python3 scripts/fetch_commodities.py
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add data/commodities.json
+          if git diff --cached --quiet; then
+            echo "sem mudancas"
+          else
+            git commit -m "dados: commodities"
+            for i in 1 2 3; do
+              git pull --rebase && git push && break
+              sleep 5
+            done
+          fi
