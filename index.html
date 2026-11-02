@@ -2812,6 +2812,7 @@ function buildCalendar() {
 async function loadBCB() {
   await loadFRED();
   await loadUS10Y();
+  await loadMacroAV();
   log('Conectando à API BCB (api.bcb.gov.br)...', 'log-c');
   setWs('bcb','CARREGANDO','var(--amber)');
 
@@ -2928,6 +2929,25 @@ async function loadUS10Y() {
   paintUS10Y();
 }
 
+/* ─── MACRO EUA + TREASURY: Alpha Vantage via GitHub Actions → data/macro.json ───
+   Opcional e à prova de falhas: se o arquivo não existir ou vier inválido, o app segue como antes. */
+var MACRO_AV = null;
+async function loadMacroAV() {
+  try {
+    const r = await fetch('data/macro.json?t=' + Math.floor(Date.now() / 600000), { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (!j || typeof j !== 'object') return;
+    MACRO_AV = j;
+    const t10 = j.treasury && j.treasury.us10y;
+    if (t10 && Array.isArray(t10.history)) {
+      const h = t10.history.map(Number).filter(v => !isNaN(v)).slice(-30);
+      if (h.length > 2) spark('us10y', h, h[h.length - 1] >= h[0] ? '#00FF41' : '#FF2D2D');
+    }
+    log('✅ Macro EUA (Alpha Vantage): ' + (j.updated ? String(j.updated).slice(0, 10) : 'ok'), 'log-g');
+  } catch (_) { /* sem macro.json: mantém os valores atuais */ }
+}
+
 /* ─── FRED (Fed Funds + US10Y) ───────────────────────── */
 async function loadFRED() {
   const manual = parseFloat(lsGet(FED_MANUAL_STORAGE));
@@ -2982,6 +3002,27 @@ function buildMacroPerf() {
     row('PPI',             '3.5%',   '3.2%',  '3.7%',  'var(--amber)'),
     row('Sentiment',       '64.7',   '67.8',  '71.1',  'var(--red)'),
   ];
+
+  // ── Overlay Alpha Vantage (data/macro.json): só substitui quando o dado existe ──
+  try {
+    const m = MACRO_AV;
+    if (m) {
+      const f = (v, d) => (v == null || isNaN(v)) ? '—' : Number(v).toFixed(d);
+      const sg = (v, d) => (v == null || isNaN(v)) ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(d);
+      const put = (label, html) => { const i = usRows.findIndex(x => x.includes(label)); if (i >= 0) usRows[i] = html; else usRows.push(html); };
+      if (m.cpi && m.cpi.yoy != null)
+        put('CPI (Inflação)', row('CPI (Inflação)', f(m.cpi.yoy, 2) + '%', '—', m.cpi.prev_yoy != null ? f(m.cpi.prev_yoy, 2) + '%' : '—', 'var(--amber)'));
+      if (m.gdp && m.gdp.qoq_ann != null)
+        put('GDP Real', row('GDP Real', f(m.gdp.qoq_ann, 1) + '%', '—', m.gdp.prev_qoq_ann != null ? f(m.gdp.prev_qoq_ann, 1) + '%' : '—', 'var(--cyan)'));
+      if (m.payroll && m.payroll.change_k != null)
+        put('Payroll', row('Payroll', sg(m.payroll.change_k, 0) + 'k', '—', m.payroll.prev_change_k != null ? sg(m.payroll.prev_change_k, 0) + 'k' : '—', m.payroll.change_k < 100 ? 'var(--red)' : 'var(--green)'));
+      if (m.unemployment && m.unemployment.value != null)
+        put('Desemprego', row('Desemprego', f(m.unemployment.value, 1) + '%', '—', m.unemployment.prev != null ? f(m.unemployment.prev, 1) + '%' : '—', 'var(--cyan)'));
+      const t = m.treasury;
+      if (t && t.spread_10y_2y != null)
+        put('Spread 10y−2y', row('Spread 10y−2y', sg(t.spread_10y_2y, 2) + '%', '—', t.spread_prev != null ? sg(t.spread_prev, 2) + '%' : '—', t.spread_10y_2y < 0 ? 'var(--red)' : 'var(--cyan)'));
+    }
+  } catch (_) { /* mantém a tabela como estava */ }
 
   const usBodyEl = document.getElementById('mpUsBody');
   if (usBodyEl) usBodyEl.innerHTML = usRows.join('');
@@ -3045,7 +3086,7 @@ function buildMacroPerf() {
   // Timestamps
   const mpUsTs = document.getElementById('mpUsTs');
   const mpBrTs = document.getElementById('mpBrTs');
-  if (mpUsTs) mpUsTs.textContent = 'UPD ' + ts;
+  if (mpUsTs) mpUsTs.textContent = 'UPD ' + ts + (MACRO_AV ? ' · AV' : '');
   if (mpBrTs) { mpBrTs.textContent = 'BCB ' + ts; mpBrTs.style.color = 'var(--green)'; }
 }
 
