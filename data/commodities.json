@@ -1,0 +1,15 @@
+{
+ "updated": "2026-11-02T23:18:14Z",
+ "source": "Yahoo Finance / Stooq / Coinbase (futuros, equivalentes ao Investing.com)",
+ "data": {
+  "btc": {
+   "c": 76706.47,
+   "d": -1526.02,
+   "dp": -1.95,
+   "pc": 78232.49,
+   "asof": "2026-11-02T23:18:14Z",
+   "symbol": "BTC-USD",
+   "via": "coinbase"
+  }
+ }
+}
