@@ -3388,6 +3388,8 @@ function gmRow(label, key, val, chg, pct, decimals, prefix) {
   </div>`;
 }
 
+function gmDM(iso) { const m = /^\d{4}-(\d{2})-(\d{2})/.exec(iso || ''); return m ? m[2] + '/' + m[1] : '—'; }
+
 function gmRender() {
   const d = GM_DATA;
   const gmLb = (n, k, etf) => d[k]?.proxy ? `${n} · ${etf}` : n;
@@ -3413,9 +3415,9 @@ function gmRender() {
   // ── Coluna Commodities + BTC ─────────────────────────
   const commEl = document.getElementById('gm-comm-body');
   if (commEl) commEl.innerHTML = [
-    gmRow(d.wti?.proxy ? 'Brent · BNO' : (d.wti?.src ? 'Brent Crude' : 'WTI Crude'), 'wti',  d.wti?.c,  d.wti?.d,  d.wti?.dp,  2, 'US$'),
-    gmRow('WTI Crude', 'wtiUS', d.wtiUS?.c, d.wtiUS?.d, d.wtiUS?.dp, 2, 'US$'),
-    gmRow(gmLb('Gold Spot','gold','GLD'), 'gold', d.gold?.c, d.gold?.d, d.gold?.dp, 2, 'US$'),
+    gmRow(d.wti?.proxy ? 'Brent · BNO' : (d.wti?.via === 'alphavantage' ? 'Brent spot · fech. ' + gmDM(d.wti.asof) : 'Brent Crude'), 'wti',  d.wti?.c,  d.wti?.d,  d.wti?.dp,  2, 'US$'),
+    gmRow(d.wtiUS?.via === 'alphavantage' ? 'WTI spot · fech. ' + gmDM(d.wtiUS.asof) : 'WTI Crude', 'wtiUS', d.wtiUS?.c, d.wtiUS?.d, d.wtiUS?.dp, 2, 'US$'),
+    gmRow(d.gold?.via === 'coinbase-paxg' ? 'Gold · PAXG' : gmLb('Gold Spot','gold','GLD'), 'gold', d.gold?.c, d.gold?.d, d.gold?.dp, 2, 'US$'),
     gmRow('Bitcoin',     'btc',  d.btc?.c,  d.btc?.d,  d.btc?.dp,  0, 'US$'),
   ].join('');
 
@@ -3445,19 +3447,19 @@ function gmRender() {
 async function loadCommoditiesJson() {
   try {
     const r = await fetch('data/commodities.json?t=' + Math.floor(Date.now() / 120000), { cache: 'no-store' });
-    if (!r.ok) return false;
+    if (!r.ok) return [];
     const j = await r.json();
     const upd = Date.parse(j.updated || '');
-    if (!upd || Date.now() - upd > 96 * 3600 * 1000) return false;
-    let n = 0;
+    if (!upd || Date.now() - upd > 96 * 3600 * 1000) return [];
+    const applied = [];
     for (const k of ['wti', 'wtiUS', 'gold', 'btc']) {
       const o = j.data && j.data[k];
       if (!o || !(o.c > 0)) continue;
-      GM_DATA[k] = { c: o.c, d: o.d, dp: o.dp, pc: o.pc, src: o.symbol || 'json', proxy: false, asof: o.asof };
-      n++;
+      GM_DATA[k] = { c: o.c, d: o.d, dp: o.dp, pc: o.pc, src: o.symbol || 'json', proxy: false, asof: o.asof, via: o.via };
+      applied.push(k);
     }
-    return n > 0;
-  } catch (_) { return false; }
+    return applied;
+  } catch (_) { return []; }
 }
 
 async function loadGlobalMarkets() {
@@ -3510,7 +3512,8 @@ async function loadGlobalMarkets() {
   if (gmErr.length && Date.now() - _gmErrLog > 600000) { _gmErrLog = Date.now(); log('Mercados Globais — falhas Finnhub: ' + gmErr.slice(0, 6).join(' · '), 'log-y'); }
 
   // Brent/Ouro/BTC reais (data/commodities.json) substituem os ETFs proxy
-  if (await loadCommoditiesJson()) hits = Math.max(hits, 11);
+  const fhHad = { wti: !!brent, gold: !!gold, btc: !!btc, wtiUS: false };
+  (await loadCommoditiesJson()).forEach(k => { if (!fhHad[k]) hits++; });
 
   // BVSP sempre via Brapi (Finnhub não tem ^BVSP grátis)
   await loadGlobalMarketsBrapi();
@@ -3521,7 +3524,7 @@ async function loadGlobalMarkets() {
   const tsEl = document.getElementById('gmTs');
   if (tsEl) tsEl.textContent = ts;
   if (badge) {
-    badge.textContent  = hits > 0 ? `${hits}/11 ONLINE` : 'ERRO';
+    badge.textContent  = hits > 0 ? `${hits}/12 ONLINE` : 'ERRO';
     badge.style.color  = hits > 5 ? 'var(--green)' : hits > 0 ? 'var(--amber)' : 'var(--red)';
   }
 
