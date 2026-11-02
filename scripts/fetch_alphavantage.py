@@ -8,8 +8,8 @@ ALPHAVANTAGE_KEY (variável de ambiente) — nunca fica no código nem no navega
 Séries (6 chamadas por execução; plano gratuito = limite diário baixo):
   CPI (mensal)  → inflação anual (YoY) calculada
   UNEMPLOYMENT  → taxa de desemprego
-  NONFARM_PAYROLL → variação mensal de empregos (em milhares)
-  REAL_GDP (trimestral) → crescimento anualizado trim/trim calculado
+  NONFARM_PAYROLL → média mensal de empregos nos últimos 12 meses (série sem ajuste sazonal)
+  REAL_GDP (trimestral) → crescimento ano contra ano (série sem ajuste sazonal)
   TREASURY_YIELD 10y e 2y (diário) → rendimento, histórico p/ sparkline e spread 10y−2y
 
 Regra de segurança: se uma série falhar (limite de uso, erro de rede), o bloco
@@ -58,27 +58,40 @@ def r(v, n=2):
     return None if v is None else round(v, n)
 
 
-def calc_cpi(p):
+def ano_antes(date):
+    y, mo, d = date.split("-")
+    return f"{int(y) - 1}-{mo}-{d}"
+
+
+def comparar_ano(p, f, casas):
+    """Compara cada ponto com o MESMO período do ano anterior (neutraliza a sazonalidade).
+    Retorna (atual, anterior, data, data_anterior) usando os dois pontos mais recentes calculáveis."""
     m = dict(p)
 
-    def yoy(date):
-        y, mo = date.split("-")[:2]
-        ant = f"{int(y) - 1}-{mo}-01"
+    def val(date):
+        ant = ano_antes(date)
         if date in m and m.get(ant):
-            return round((m[date] / m[ant] - 1) * 100, 2)
+            return round(f(m[date], m[ant]), casas)
         return None
 
     datas = [d for d, _ in p]
     for i, d in enumerate(datas[:6]):
-        a = yoy(d)
+        a = val(d)
         if a is None:
             continue
         for d2 in datas[i + 1:i + 4]:
-            b = yoy(d2)
+            b = val(d2)
             if b is not None:
-                return {"yoy": a, "prev_yoy": b, "date": d, "prev_date": d2}
-        return {"yoy": a, "prev_yoy": None, "date": d}
+                return a, b, d, d2
+        return a, None, d, None
     return None
+
+
+def calc_cpi(p):
+    r_ = comparar_ano(p, lambda c, a: (c / a - 1) * 100, 2)
+    if not r_:
+        return None
+    return {"yoy": r_[0], "prev_yoy": r_[1], "date": r_[2], "prev_date": r_[3]}
 
 
 def calc_unemployment(p):
@@ -90,22 +103,22 @@ def calc_unemployment(p):
 
 
 def calc_payroll(p):
-    if len(p) < 3:
+    # A série da Alpha Vantage NÃO é ajustada sazonalmente (a variação mensal não bate com o
+    # número oficial do BLS). Usamos a média mensal dos últimos 12 meses (em milhares), que
+    # elimina a sazonalidade.
+    r_ = comparar_ano(p, lambda c, a: (c - a) / 12, 0)
+    if not r_:
         return None
-    # AV: total nonfarm em milhares de pessoas → variação mensal em milhares
-    return {
-        "change_k": round(p[0][1] - p[1][1]),
-        "prev_change_k": round(p[1][1] - p[2][1]),
-        "date": p[0][0],
-    }
+    return {"avg12_k": int(r_[0]), "prev_avg12_k": None if r_[1] is None else int(r_[1]),
+            "date": r_[2], "prev_date": r_[3]}
 
 
 def calc_gdp(p):
-    if len(p) < 3 or min(p[0][1], p[1][1], p[2][1]) <= 0:
+    # Série trimestral também sem ajuste sazonal → crescimento ano contra ano (a/a).
+    r_ = comparar_ano(p, lambda c, a: (c / a - 1) * 100, 2)
+    if not r_:
         return None
-    # PIB real trimestral (nível) → crescimento trim/trim anualizado
-    ann = lambda a, b: round(((a / b) ** 4 - 1) * 100, 2)
-    return {"qoq_ann": ann(p[0][1], p[1][1]), "prev_qoq_ann": ann(p[1][1], p[2][1]), "date": p[0][0]}
+    return {"yoy": r_[0], "prev_yoy": r_[1], "date": r_[2], "prev_date": r_[3]}
 
 
 def calc_ust(p):
