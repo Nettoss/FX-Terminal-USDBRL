@@ -3297,7 +3297,7 @@ let _gmPollingActive = false;
 const GM_DATA = {
   spx:null, comp:null, ndx:null, dji:null,
   ni225:null, topx:null, dax:null, bvsp:null,
-  wti:null, gold:null, btc:null,
+  wti:null, wtiUS:null, gold:null, btc:null,
 };
 
 // Correlação com DXY: +1 = positiva, -1 = negativa
@@ -3309,7 +3309,7 @@ const GM_DXY_CORR = {
   topx: 0.3,
   dax:-0.5,    // correlação negativa moderada
   bvsp:-1,     // emergente, saída de capital com DXY forte
-  wti:-1, gold:-1, btc:-1,
+  wti:-1, wtiUS:-1, gold:-1, btc:-1,
 };
 
 function gmDxyContext(corrSign) {
@@ -3414,6 +3414,7 @@ function gmRender() {
   const commEl = document.getElementById('gm-comm-body');
   if (commEl) commEl.innerHTML = [
     gmRow(d.wti?.proxy ? 'Brent · BNO' : (d.wti?.src ? 'Brent Crude' : 'WTI Crude'), 'wti',  d.wti?.c,  d.wti?.d,  d.wti?.dp,  2, 'US$'),
+    gmRow('WTI Crude', 'wtiUS', d.wtiUS?.c, d.wtiUS?.d, d.wtiUS?.dp, 2, 'US$'),
     gmRow(gmLb('Gold Spot','gold','GLD'), 'gold', d.gold?.c, d.gold?.d, d.gold?.dp, 2, 'US$'),
     gmRow('Bitcoin',     'btc',  d.btc?.c,  d.btc?.d,  d.btc?.dp,  0, 'US$'),
   ].join('');
@@ -3439,9 +3440,30 @@ function gmRender() {
   }
 }
 
+/* ─── COMMODITIES + BTC: data/commodities.json (GitHub Actions, futuros = Investing.com) ───
+   Sobrescreve os proxies ETF (BNO/GLD) por Brent, Ouro e Bitcoin reais. Ignora arquivo velho (>96h). */
+async function loadCommoditiesJson() {
+  try {
+    const r = await fetch('data/commodities.json?t=' + Math.floor(Date.now() / 120000), { cache: 'no-store' });
+    if (!r.ok) return false;
+    const j = await r.json();
+    const upd = Date.parse(j.updated || '');
+    if (!upd || Date.now() - upd > 96 * 3600 * 1000) return false;
+    let n = 0;
+    for (const k of ['wti', 'wtiUS', 'gold', 'btc']) {
+      const o = j.data && j.data[k];
+      if (!o || !(o.c > 0)) continue;
+      GM_DATA[k] = { c: o.c, d: o.d, dp: o.dp, pc: o.pc, src: o.symbol || 'json', proxy: false, asof: o.asof };
+      n++;
+    }
+    return n > 0;
+  } catch (_) { return false; }
+}
+
 async function loadGlobalMarkets() {
   if (!S.apiKey) {
-    // Sem chave: tentar Brapi para pelo menos BVSP e commodities
+    // Sem chave: commodities.json + Brapi para pelo menos BVSP e commodities
+    await loadCommoditiesJson();
     await loadGlobalMarketsBrapi();
     gmRender();
     return;
@@ -3486,6 +3508,9 @@ async function loadGlobalMarkets() {
   store('btc',   btc);
   store('bvsp',  ewz);   // proxy; se houver chave Brapi, o valor real do ^BVSP sobrescreve abaixo
   if (gmErr.length && Date.now() - _gmErrLog > 600000) { _gmErrLog = Date.now(); log('Mercados Globais — falhas Finnhub: ' + gmErr.slice(0, 6).join(' · '), 'log-y'); }
+
+  // Brent/Ouro/BTC reais (data/commodities.json) substituem os ETFs proxy
+  if (await loadCommoditiesJson()) hits = Math.max(hits, 11);
 
   // BVSP sempre via Brapi (Finnhub não tem ^BVSP grátis)
   await loadGlobalMarketsBrapi();
