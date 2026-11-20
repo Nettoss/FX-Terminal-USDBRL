@@ -1,16 +1,16 @@
 {
- "updated": "2026-11-20T03:59:44Z",
+ "updated": "2026-11-20T12:32:48Z",
  "source": "Yahoo / Stooq / Coinbase / Alpha Vantage (equivalentes ao Investing.com)",
  "data": {
   "btc": {
-   "c": 62067.1,
-   "d": -1068.16,
-   "dp": -1.69,
-   "pc": 63135.26,
-   "asof": "2026-11-20T03:59:44Z",
+   "c": 61463.09,
+   "d": -2349.84,
+   "dp": -3.68,
+   "pc": 63812.93,
+   "asof": "2026-11-20T12:32:48Z",
    "symbol": "BTC-USD",
    "via": "coinbase",
-   "fetched": "2026-11-20T03:59:44Z"
+   "fetched": "2026-11-20T12:32:48Z"
   },
   "wti": {
    "c": 92.94,
@@ -18,7 +18,7 @@
    "dp": 0.04,
    "pc": 92.9,
    "asof": "2026-11-17T00:00:00Z",
-   "fetched": "2026-11-19T23:16:11Z",
+   "fetched": "2026-11-20T12:32:31Z",
    "symbol": "BZ=F",
    "via": "alphavantage"
   },
@@ -28,19 +28,19 @@
    "dp": 0.32,
    "pc": 89.24,
    "asof": "2026-11-17T00:00:00Z",
-   "fetched": "2026-11-19T23:16:17Z",
+   "fetched": "2026-11-20T12:32:37Z",
    "symbol": "CL=F",
    "via": "alphavantage"
   },
   "gold": {
-   "c": 3542.49,
-   "d": -170.05,
-   "dp": -4.58,
-   "pc": 3712.54,
-   "asof": "2026-11-20T03:59:39Z",
+   "c": 3567.63,
+   "d": -145.69,
+   "dp": -3.92,
+   "pc": 3713.32,
+   "asof": "2026-11-20T12:32:43Z",
    "symbol": "GC=F",
    "via": "coinbase-paxg",
-   "fetched": "2026-11-20T03:59:39Z"
+   "fetched": "2026-11-20T12:32:43Z"
   }
  }
 }
